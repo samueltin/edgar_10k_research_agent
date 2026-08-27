@@ -1,0 +1,9 @@
+edgartools>=3.0.0
+langgraph>=0.2.0
+langchain-openai>=0.2.0
+langchain-anthropic>=0.2.0
+pydantic>=2.0
+pandas>=2.0
+streamlit>=1.38
+python-dotenv>=1.0
+pytest>=8.0

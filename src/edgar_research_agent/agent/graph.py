@@ -1,0 +1,50 @@
+"""Builds and compiles the research agent's LangGraph workflow.
+
+All five components from the Component diagram are graph nodes, including
+XBRL extraction. xbrl_total_revenue is produced by extract_xbrl and flows
+through state to the validator like everything else -- nothing is seeded
+into state before graph.invoke() is called.
+"""
+from langgraph.graph import StateGraph, END
+from edgar_research_agent.agent.state import GraphState
+from edgar_research_agent.agent.nodes.xbrl_extractor import xbrl_extractor_node
+from edgar_research_agent.agent.nodes.section_extractor import section_extractor_node
+from edgar_research_agent.agent.nodes.segment_extractor import segment_extractor_node
+from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+from edgar_research_agent.agent.nodes.validator import validator_node, route_validation
+from edgar_research_agent.agent.nodes.human_review import human_review_node
+
+
+def build_graph():
+    workflow = StateGraph(GraphState)
+
+    workflow.add_node("extract_xbrl", xbrl_extractor_node)
+    workflow.add_node("fetch_sections", section_extractor_node)
+    workflow.add_node("extract_segments", segment_extractor_node)
+    workflow.add_node("summarize_risks", risk_summarizer_node)
+    workflow.add_node("validate", validator_node)
+    workflow.add_node("human_review", human_review_node)
+
+    workflow.set_entry_point("extract_xbrl")
+    workflow.add_edge("extract_xbrl", "fetch_sections")
+    workflow.add_edge("fetch_sections", "extract_segments")
+    workflow.add_edge("fetch_sections", "summarize_risks")
+    workflow.add_edge("extract_segments", "validate")
+    workflow.add_conditional_edges(
+        "validate",
+        route_validation,
+        {"end": END, "human_review": "human_review"},
+    )
+
+    return workflow.compile()
+
+
+def run(ticker: str) -> dict:
+    """Orchestration entry point: build the graph and run it for one ticker.
+
+    Returns the raw GraphState result. This is the only place that knows
+    about build_graph()/invoke() -- callers (e.g. memo/formatter.py) should
+    use this rather than compiling the graph themselves.
+    """
+    graph = build_graph()
+    return graph.invoke({"ticker": ticker})
