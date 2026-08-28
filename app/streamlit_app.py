@@ -46,7 +46,7 @@ if memo:
         st.warning(f"Flagged for review: {memo['errors']}")
     st.table([s.model_dump() for s in memo["segments"]])
 
-    st.subheader("Risk factors")
+    st.subheader("Current Risk factors summary (by category)")
     st.caption("Item 1A, summarized by category -- expand a category to check the summary against its exact source text.")
     for category in memo["risk_summary_by_category"]:
         with st.expander(f"📌 {category['heading']}"):
