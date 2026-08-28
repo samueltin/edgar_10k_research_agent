@@ -22,7 +22,7 @@ st.title("10-K Research Agent")
 ticker = st.text_input("Ticker", value="MSFT").upper().strip()
 max_categories_to_summarize = st.number_input(
     "Max risk categories to summarize (0 = summarize none, 999 = summarize all)",
-    min_value=0, max_value=999, value=999, step=1,
+    min_value=0, max_value=999, value=0, step=1,
     help="Limits how many risk categories get sent to the LLM for summarization, in the filing's "
          "own document order. Categories beyond this limit are skipped (no LLM call for them), but "
          "you can still read their original text -- useful for controlling token cost on filings "
