@@ -46,7 +46,10 @@ class GroundednessResult(BaseModel):
     grounded: bool
     ungrounded_percentage: Optional[float] = None  # 0.0-1.0; only ever populated by the Azure backend
     ungrounded_spans: List[UngroundedSpan] = Field(default_factory=list)
-    backend: str  # "azure_content_safety" or "custom_llm" -- surfaced in the UI for transparency
+    backend: str  # "azure_content_safety", "custom_llm", or "skipped_no_summary"
+    skipped: bool = False  # True when the category's summarization itself was skipped (see risk_summarizer.py's
+                            # cost-control limit) -- there's no real summary to check, so this was never a genuine
+                            # groundedness check, not a check that happened to pass
 
 
 def check_groundedness(summary_text: str, source_text: str, backend: Optional[str] = None) -> GroundednessResult:

@@ -20,10 +20,20 @@ st.set_page_config(page_title="10-K Research Agent", layout="wide")
 st.title("10-K Research Agent")
 
 ticker = st.text_input("Ticker", value="MSFT").upper().strip()
+max_categories_to_summarize = st.number_input(
+    "Max risk categories to summarize (0 = summarize all)",
+    min_value=0, value=0, step=1,
+    help="Limits how many risk categories get sent to the LLM for summarization, in the filing's "
+         "own document order. Categories beyond this limit are skipped (no LLM call for them), but "
+         "you can still read their original text -- useful for controlling token cost on filings "
+         "with many risk categories.",
+)
 
 if st.button("Generate memo") and ticker:
     with st.spinner(f"Fetching and analyzing {ticker}..."):
-        st.session_state["memo"] = generate_memo(ticker)
+        st.session_state["memo"] = generate_memo(
+            ticker, max_categories_to_summarize=max_categories_to_summarize or None,
+        )
 
 memo = st.session_state.get("memo")
 
@@ -56,8 +66,12 @@ if memo:
         with st.expander(f"📌 {category['heading']}"):
             col_summary, col_source = st.columns(2)
             with col_summary:
-                st.caption("LLM summary")
-                st.markdown(category["summary"])
+                if category.get("skipped"):
+                    st.caption("LLM summary")
+                    st.info(f"⏭️ {category['summary']}")
+                else:
+                    st.caption("LLM summary")
+                    st.markdown(category["summary"])
             with col_source:
                 st.caption("Original (as filed)")
                 st.text_area(
@@ -65,6 +79,10 @@ if memo:
                     height=300, label_visibility="collapsed",
                     key=f"source_{category['heading']}",
                 )
+
+            if category.get("skipped"):
+                st.caption("Groundedness not checked -- this category's summary was skipped.")
+                continue
 
             groundedness_key = f"groundedness_{category['heading']}"
             if groundedness_key not in st.session_state:

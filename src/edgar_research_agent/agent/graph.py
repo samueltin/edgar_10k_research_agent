@@ -47,12 +47,18 @@ def build_graph():
     return workflow.compile()
 
 
-def run(ticker: str) -> dict:
+def run(ticker: str, max_categories_to_summarize: int | None = None) -> dict:
     """Orchestration entry point: build the graph and run it for one ticker.
 
     Returns the raw GraphState result. This is the only place that knows
     about build_graph()/invoke() -- callers (e.g. memo/formatter.py) should
     use this rather than compiling the graph themselves.
+
+    max_categories_to_summarize is a cost control -- see risk_summarizer.py.
+    None (the default) means no limit, summarize every category found.
     """
     graph = build_graph()
-    return graph.invoke({"ticker": ticker})
+    initial_state = {"ticker": ticker}
+    if max_categories_to_summarize:
+        initial_state["max_categories_to_summarize"] = max_categories_to_summarize
+    return graph.invoke(initial_state)

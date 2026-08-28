@@ -7,12 +7,19 @@ shapes what run() returns.
 """
 
 
-def generate_memo(ticker: str) -> dict:
+def generate_memo(ticker: str, max_categories_to_summarize: int | None = None) -> dict:
     """Run the agent for one ticker and format the result into a memo.
 
     The agent.graph import is local to this function (not module-level), so
     the pure formatting helpers below stay testable without langgraph
     installed.
+
+    max_categories_to_summarize is a cost control: only the first N risk
+    categories (in the filing's own document order) get sent to the LLM
+    for summarization; the rest are marked skipped, with a placeholder
+    summary but their real source_text still included, so the analyst can
+    still read the original content. None (default) means no limit. See
+    agent/nodes/risk_summarizer.py for the full reasoning.
 
     Structure:
         {
@@ -23,7 +30,7 @@ def generate_memo(ticker: str) -> dict:
             "validation_status": "PASS" | "FAIL",
             "errors": str,
             "risk_summary_by_category": [
-                {"heading": str, "summary": str, "source_text": str, "groundedness": GroundednessResult},
+                {"heading": str, "summary": str, "source_text": str, "skipped": bool, "groundedness": GroundednessResult},
                 ...
             ],
             "mda_text": str,
@@ -32,11 +39,12 @@ def generate_memo(ticker: str) -> dict:
     groundedness is now computed automatically by the graph (agent.nodes.
     groundedness_checker), one per category, merged in here by position --
     see that node's docstring for the real cost/latency consequence of
-    this running on every memo generation, not on demand.
+    this running on every memo generation, not on demand. Skipped
+    categories get a skipped=True GroundednessResult, not a real check.
     """
     from edgar_research_agent.agent.graph import run
 
-    result = run(ticker)
+    result = run(ticker, max_categories_to_summarize=max_categories_to_summarize)
 
     risk_summary_by_category = [
         {**category, "groundedness": groundedness}
@@ -83,9 +91,19 @@ def check_category_groundedness(category: dict):
     around agent.groundedness.check_groundedness() for the same testability
     and reuse reasons as before.
 
+    Skipped categories (see risk_summarizer.py's max_categories_to_
+    summarize control) have no real summary to check -- re-checking one
+    would waste an LLM call comparing a placeholder message against real
+    source text, exactly the cost this control exists to avoid. Returns a
+    skipped result immediately instead, without calling check_groundedness
+    at all.
+
     category is one entry from risk_summary_by_category, i.e.
-    {"heading": str, "summary": str, "source_text": str, "groundedness": GroundednessResult}.
+    {"heading": str, "summary": str, "source_text": str, "skipped": bool}.
     """
-    from edgar_research_agent.agent.groundedness import check_groundedness
+    from edgar_research_agent.agent.groundedness import check_groundedness, GroundednessResult
+
+    if category.get("skipped"):
+        return GroundednessResult(grounded=True, backend="skipped_no_summary", skipped=True)
 
     return check_groundedness(category["summary"], category["source_text"])

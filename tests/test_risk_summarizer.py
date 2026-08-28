@@ -162,3 +162,258 @@ def test_real_oracle_item_1a_title_line_is_dropped_case_insensitively():
     headings = [c["heading"] for c in chunks]
     assert "Item 1A.\tRisk Factors" not in headings
     assert headings == ["Overview", "General Risks"]
+
+
+# --- risk_summarizer_node: max_categories_to_summarize control ---
+
+class _FakeCategorySummary:
+    def __init__(self, summary):
+        self.summary = summary
+
+
+class _FakeRiskFactorsSummary:
+    def __init__(self, categories):
+        self.categories = categories
+
+
+class _FakeStructuredLLM:
+    def __init__(self, categories_to_return):
+        self._categories_to_return = categories_to_return
+
+    def invoke(self, prompt):
+        return _FakeRiskFactorsSummary(self._categories_to_return)
+
+
+class _FakeLLM:
+    def __init__(self, categories_to_return):
+        self._categories_to_return = categories_to_return
+
+    def with_structured_output(self, schema):
+        return _FakeStructuredLLM(self._categories_to_return)
+
+
+THREE_CATEGORY_TEXT = """ITEM 1A. RISK FACTORS
+
+Intro paragraph before the first real category, long enough to pass the filter.
+
+STRATEGIC AND COMPETITIVE RISKS
+
+We face intense competition across all markets for our products.
+
+OPERATIONAL RISKS
+
+Our business relies on our ability to attract and retain talent.
+
+FINANCIAL RISKS
+
+Our results may fluctuate due to changes in currency exchange rates."""
+
+
+def test_no_limit_summarizes_every_category(monkeypatch):
+    """THREE_CATEGORY_TEXT actually produces 4 chunks: Overview (the
+    intro text before the first real heading) plus the 3 named
+    categories -- so 4 fake summaries are needed, not 3."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    fake_categories = [
+        _FakeCategorySummary("overview summary"),
+        _FakeCategorySummary("summary A"),
+        _FakeCategorySummary("summary B"),
+        _FakeCategorySummary("summary C"),
+    ]
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM(fake_categories),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT}
+    result = risk_summarizer_node(state)
+
+    categories = result["risk_summary_by_category"]
+    assert len(categories) == 4
+    assert all(c["skipped"] is False for c in categories)
+    assert [c["summary"] for c in categories] == ["overview summary", "summary A", "summary B", "summary C"]
+
+
+def test_limit_to_2_summarizes_first_2_named_categories_and_skips_the_rest(monkeypatch):
+    """'Top N' means the first N NAMED categories in the FILING'S OWN
+    document order -- there's no other ranking signal in this pipeline.
+    Overview (intro boilerplate) doesn't count as one of the N -- see
+    test_overview_is_exempt_from_the_limit for why."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import (
+        risk_summarizer_node, SKIPPED_SUMMARY_MESSAGE,
+    )
+
+    fake_categories = [
+        _FakeCategorySummary("overview summary"),
+        _FakeCategorySummary("summary A"),
+        _FakeCategorySummary("summary B"),
+    ]
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM(fake_categories),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 2}
+    result = risk_summarizer_node(state)
+
+    categories = result["risk_summary_by_category"]
+    assert len(categories) == 4
+    assert categories[0]["heading"] == "Overview"
+    assert categories[0]["summary"] == "overview summary"
+    assert categories[0]["skipped"] is False
+    assert categories[1]["heading"] == "STRATEGIC AND COMPETITIVE RISKS"
+    assert categories[1]["summary"] == "summary A"
+    assert categories[1]["skipped"] is False
+    assert categories[2]["heading"] == "OPERATIONAL RISKS"
+    assert categories[2]["summary"] == "summary B"
+    assert categories[2]["skipped"] is False
+    assert categories[3]["heading"] == "FINANCIAL RISKS"
+    assert categories[3]["summary"] == SKIPPED_SUMMARY_MESSAGE
+    assert categories[3]["skipped"] is True
+
+
+def test_overview_is_exempt_from_the_limit(monkeypatch):
+    """Real design gap found via testing: Overview is chunk #1 in
+    document order, so a naive 'first N chunks' limit would treat it as
+    consuming one of the N slots -- meaning 'top 3' would silently
+    summarize only 2 REAL named categories. Overview must always be
+    summarized (when present) regardless of the limit, and must not
+    count against it."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    fake_categories = [
+        _FakeCategorySummary("overview summary"),
+        _FakeCategorySummary("summary A"),
+    ]
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM(fake_categories),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 1}
+    result = risk_summarizer_node(state)
+
+    categories = result["risk_summary_by_category"]
+    overview = next(c for c in categories if c["heading"] == "Overview")
+    assert overview["skipped"] is False
+    assert overview["summary"] == "overview summary"
+
+    named = [c for c in categories if c["heading"] != "Overview"]
+    assert sum(1 for c in named if not c["skipped"]) == 1
+    assert sum(1 for c in named if c["skipped"]) == 2
+
+
+def test_skipped_category_still_keeps_its_real_source_text(monkeypatch):
+    """The whole point is saving LLM cost, not hiding the filing's real
+    content from the analyst -- a skipped category's original text must
+    still be available."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM([_FakeCategorySummary("overview summary"), _FakeCategorySummary("summary A")]),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 1}
+    result = risk_summarizer_node(state)
+
+    skipped = result["risk_summary_by_category"][-1]
+    assert skipped["skipped"] is True
+    assert "currency exchange rates" in skipped["source_text"]
+
+
+def test_limit_of_zero_means_no_limit(monkeypatch):
+    """0 is used by the UI as the 'no limit' sentinel -- must behave
+    identically to the limit being entirely absent from state."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    fake_categories = [
+        _FakeCategorySummary("overview summary"),
+        _FakeCategorySummary("summary A"),
+        _FakeCategorySummary("summary B"),
+        _FakeCategorySummary("summary C"),
+    ]
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM(fake_categories),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 0}
+    result = risk_summarizer_node(state)
+
+    assert len(result["risk_summary_by_category"]) == 4
+    assert all(not c["skipped"] for c in result["risk_summary_by_category"])
+
+
+def test_limit_covering_all_categories_produces_no_skipped_entries(monkeypatch):
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    fake_categories = [
+        _FakeCategorySummary("overview summary"),
+        _FakeCategorySummary("summary A"),
+        _FakeCategorySummary("summary B"),
+        _FakeCategorySummary("summary C"),
+    ]
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM(fake_categories),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 10}
+    result = risk_summarizer_node(state)
+
+    assert len(result["risk_summary_by_category"]) == 4
+    assert all(not c["skipped"] for c in result["risk_summary_by_category"])
+
+
+def test_no_chunks_at_all_makes_no_llm_call(monkeypatch):
+    """If a filing's Risk Factors text produces zero chunks (e.g. genuinely
+    empty text), no LLM call should be made at all -- there's nothing to
+    summarize, calling the LLM with an empty chunks_text would be pure
+    waste."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    llm_was_called = {"value": False}
+
+    def fake_get_llm():
+        llm_was_called["value"] = True
+        return _FakeLLM([])
+
+    monkeypatch.setattr("edgar_research_agent.agent.nodes.risk_summarizer.get_llm", fake_get_llm)
+
+    state = {"ticker": "TEST", "risk_factors_text": "", "max_categories_to_summarize": 5}
+    result = risk_summarizer_node(state)
+
+    assert result["risk_summary_by_category"] == []
+    assert llm_was_called["value"] is False
+
+
+# --- Provider-aware context limit (context_limits.py) integration ---
+
+def test_uses_provider_aware_context_limit(monkeypatch):
+    """Real bug found running llama3.1:8b on real hardware: the old flat
+    100,000-char cap (sized for cloud models) badly overran a local
+    model's real 4096-token context window, silently truncating the
+    prompt. Confirms risk_summarizer_node now asks context_limits.py for
+    the right limit rather than using a hardcoded constant."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    captured = {}
+
+    def fake_get_max_input_chars(task):
+        captured["task"] = task
+        return 50  # deliberately tiny, to prove it's actually being applied
+
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_max_input_chars", fake_get_max_input_chars
+    )
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM([_FakeCategorySummary("summary")]),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT}
+    risk_summarizer_node(state)
+
+    assert captured["task"] == "risk_summarization"

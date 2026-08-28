@@ -10,8 +10,7 @@ from typing import List
 from pydantic import BaseModel, Field
 from edgar_research_agent.agent.state import GraphState
 from edgar_research_agent.agent.llm_provider import get_llm
-
-MAX_CONTEXT_CHARS = 100_000
+from edgar_research_agent.agent.context_limits import get_max_input_chars
 
 # BUG FIXED (found via a real Oracle 10-K run: the entire Item 1A section
 # fell into a single "Overview" bucket instead of Oracle's real 6
@@ -128,20 +127,85 @@ not in the text, and do not merge categories together.
 {chunks_text}
 """
 
+SKIPPED_SUMMARY_MESSAGE = "Summary skipped due to token usage management."
+
 
 def risk_summarizer_node(state: GraphState) -> dict:
-    chunks = split_by_category(state["risk_factors_text"][:MAX_CONTEXT_CHARS])
-    chunks_text = "\n\n".join(f"=== {c['heading']} ===\n{c['text']}" for c in chunks)
+    """Summarize each risk category, with an optional cap on how many
+    NAMED categories actually get sent to the LLM (max_categories_to_
+    summarize in state -- None or absent means no limit, summarize
+    everything).
 
-    llm = get_llm()
-    structured_llm = llm.with_structured_output(RiskFactorsSummary)
+    "Top N" means the first N NAMED categories in the FILING'S OWN
+    document order (the order split_by_category() already returns them
+    in), not ranked by any notion of importance -- there's no existing
+    signal in this pipeline for ranking categories by materiality, and
+    document order is the only ordering that's genuinely there.
 
-    prompt = PROMPT_TEMPLATE.format(ticker=state["ticker"], chunks_text=chunks_text)
-    result = structured_llm.invoke(prompt)
+    "Overview" (split_by_category()'s bucket for intro text before the
+    first real heading) is DELIBERATELY EXEMPT from the limit and is
+    always summarized when present. It isn't one of the company's actual
+    risk categories, just leftover boilerplate -- counting it against
+    the limit would mean "top 3" silently summarizes only 2 real
+    categories, which isn't what an analyst asking for the top 3 risk
+    factors actually means.
 
-    risk_summary_by_category = [
-        {"heading": chunk["heading"], "summary": category.summary, "source_text": chunk["text"]}
-        for chunk, category in zip(chunks, result.categories)
-    ]
+    Categories beyond the limit are NOT sent to the LLM at all (the real
+    point of this control -- saving the actual token cost, not just
+    hiding the result) and get a placeholder summary instead, marked
+    skipped=True. Their real source_text is still included, so the
+    analyst can still read the original filing content for a skipped
+    category themselves, even without an LLM summary of it. Downstream,
+    groundedness_checker_node also skips these -- checking a placeholder
+    message against real source text would be meaningless and would
+    waste exactly the LLM calls this control exists to save.
+
+    REAL BUG FOUND running a local Ollama model on real hardware (an 8GB
+    GPU, 4096-token confirmed context window): sending the entire
+    combined chunks_text (previously capped at a flat 100,000 characters,
+    sized for cloud models) silently truncated far more than the local
+    model's context window could hold. get_max_input_chars() now applies
+    a provider- and task-aware limit instead -- see context_limits.py.
+    max_categories_to_summarize is a SECOND, independent way to control
+    how much text reaches the LLM in this same call -- both work together,
+    the char limit truncates raw text length, the category limit reduces
+    how many categories' worth of text are included in the first place.
+    """
+    max_input_chars = get_max_input_chars("risk_summarization")
+    chunks = split_by_category(state["risk_factors_text"][:max_input_chars])
+
+    overview_chunks = [c for c in chunks if c["heading"] == "Overview"]
+    named_chunks = [c for c in chunks if c["heading"] != "Overview"]
+
+    max_categories = state.get("max_categories_to_summarize")
+    if max_categories:
+        named_chunks_to_summarize = named_chunks[:max_categories]
+        skipped_chunks = named_chunks[max_categories:]
+    else:
+        named_chunks_to_summarize = named_chunks
+        skipped_chunks = []
+
+    chunks_to_summarize = overview_chunks + named_chunks_to_summarize
+
+    risk_summary_by_category: List[dict] = []
+
+    if chunks_to_summarize:
+        chunks_text = "\n\n".join(f"=== {c['heading']} ===\n{c['text']}" for c in chunks_to_summarize)
+
+        llm = get_llm()
+        structured_llm = llm.with_structured_output(RiskFactorsSummary)
+
+        prompt = PROMPT_TEMPLATE.format(ticker=state["ticker"], chunks_text=chunks_text)
+        result = structured_llm.invoke(prompt)
+
+        risk_summary_by_category.extend(
+            {"heading": chunk["heading"], "summary": category.summary, "source_text": chunk["text"], "skipped": False}
+            for chunk, category in zip(chunks_to_summarize, result.categories)
+        )
+
+    risk_summary_by_category.extend(
+        {"heading": chunk["heading"], "summary": SKIPPED_SUMMARY_MESSAGE, "source_text": chunk["text"], "skipped": True}
+        for chunk in skipped_chunks
+    )
 
     return {"risk_summary_by_category": risk_summary_by_category}

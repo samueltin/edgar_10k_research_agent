@@ -1,5 +1,5 @@
 """LangGraph state definition for the research agent pipeline."""
-from typing import List, TypedDict
+from typing import List, Optional, TypedDict
 from edgar_research_agent.agent.schemas import KPIRecord, SegmentKPI
 from edgar_research_agent.agent.groundedness import GroundednessResult
 
@@ -14,6 +14,7 @@ class GraphState(TypedDict):
     risk_factors_text: str
     risk_summary_by_category: List[dict]
     groundedness_results: List[GroundednessResult]  # one per risk_summary_by_category entry, same order
+    max_categories_to_summarize: Optional[int]  # cost control -- see risk_summarizer.py; None/absent = no limit
 
     xbrl_total_revenue: float           # ground truth for validation
     extracted_segments: List[SegmentKPI]  # Track 2 output (LLM)
