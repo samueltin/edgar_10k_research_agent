@@ -56,9 +56,13 @@ def run(ticker: str, max_categories_to_summarize: int | None = None) -> dict:
 
     max_categories_to_summarize is a cost control -- see risk_summarizer.py.
     None (the default) means no limit, summarize every category found.
+    0 means summarize none (every named category is skipped; Overview is
+    still exempt, see risk_summarizer.py). 999 is the UI's "summarize all"
+    value -- real filings have far fewer named risk categories than that,
+    so it behaves the same as no limit without needing special-casing here.
     """
     graph = build_graph()
     initial_state = {"ticker": ticker}
-    if max_categories_to_summarize:
+    if max_categories_to_summarize is not None:
         initial_state["max_categories_to_summarize"] = max_categories_to_summarize
     return graph.invoke(initial_state)

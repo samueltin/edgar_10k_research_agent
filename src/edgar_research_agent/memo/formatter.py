@@ -18,8 +18,9 @@ def generate_memo(ticker: str, max_categories_to_summarize: int | None = None) -
     categories (in the filing's own document order) get sent to the LLM
     for summarization; the rest are marked skipped, with a placeholder
     summary but their real source_text still included, so the analyst can
-    still read the original content. None (default) means no limit. See
-    agent/nodes/risk_summarizer.py for the full reasoning.
+    still read the original content. None (default) means no limit, 0
+    means summarize none, and 999 means summarize all (the UI's max
+    value). See agent/nodes/risk_summarizer.py for the full reasoning.
 
     Structure:
         {

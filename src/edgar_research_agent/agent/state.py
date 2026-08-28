@@ -14,7 +14,7 @@ class GraphState(TypedDict):
     risk_factors_text: str
     risk_summary_by_category: List[dict]
     groundedness_results: List[GroundednessResult]  # one per risk_summary_by_category entry, same order
-    max_categories_to_summarize: Optional[int]  # cost control -- see risk_summarizer.py; None/absent = no limit
+    max_categories_to_summarize: Optional[int]  # cost control -- see risk_summarizer.py; None/absent = no limit, 0 = summarize none, 999 = summarize all
 
     xbrl_total_revenue: float           # ground truth for validation
     extracted_segments: List[SegmentKPI]  # Track 2 output (LLM)

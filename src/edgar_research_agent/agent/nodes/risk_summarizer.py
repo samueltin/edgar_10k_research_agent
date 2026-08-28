@@ -150,6 +150,12 @@ def risk_summarizer_node(state: GraphState) -> dict:
     categories, which isn't what an analyst asking for the top 3 risk
     factors actually means.
 
+    0 means summarize none of the named categories (Overview is still
+    exempt, per above). 999 is the UI's "summarize all" value -- real
+    filings have far fewer named categories than that, so the plain
+    named_chunks[:max_categories] slice below already summarizes
+    everything without needing a dedicated "unlimited" sentinel.
+
     Categories beyond the limit are NOT sent to the LLM at all (the real
     point of this control -- saving the actual token cost, not just
     hiding the result) and get a placeholder summary instead, marked
@@ -178,7 +184,7 @@ def risk_summarizer_node(state: GraphState) -> dict:
     named_chunks = [c for c in chunks if c["heading"] != "Overview"]
 
     max_categories = state.get("max_categories_to_summarize")
-    if max_categories:
+    if max_categories is not None:
         named_chunks_to_summarize = named_chunks[:max_categories]
         skipped_chunks = named_chunks[max_categories:]
     else:

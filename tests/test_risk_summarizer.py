@@ -323,27 +323,30 @@ def test_skipped_category_still_keeps_its_real_source_text(monkeypatch):
     assert "currency exchange rates" in skipped["source_text"]
 
 
-def test_limit_of_zero_means_no_limit(monkeypatch):
-    """0 is used by the UI as the 'no limit' sentinel -- must behave
-    identically to the limit being entirely absent from state."""
-    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+def test_limit_of_zero_means_summarize_none(monkeypatch):
+    """0 means summarize none of the named categories -- Overview is still
+    exempt and always summarized when present."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import (
+        risk_summarizer_node, SKIPPED_SUMMARY_MESSAGE,
+    )
 
-    fake_categories = [
-        _FakeCategorySummary("overview summary"),
-        _FakeCategorySummary("summary A"),
-        _FakeCategorySummary("summary B"),
-        _FakeCategorySummary("summary C"),
-    ]
     monkeypatch.setattr(
         "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
-        lambda: _FakeLLM(fake_categories),
+        lambda: _FakeLLM([_FakeCategorySummary("overview summary")]),
     )
 
     state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 0}
     result = risk_summarizer_node(state)
 
-    assert len(result["risk_summary_by_category"]) == 4
-    assert all(not c["skipped"] for c in result["risk_summary_by_category"])
+    categories = result["risk_summary_by_category"]
+    overview = next(c for c in categories if c["heading"] == "Overview")
+    assert overview["skipped"] is False
+    assert overview["summary"] == "overview summary"
+
+    named = [c for c in categories if c["heading"] != "Overview"]
+    assert len(named) == 3
+    assert all(c["skipped"] for c in named)
+    assert all(c["summary"] == SKIPPED_SUMMARY_MESSAGE for c in named)
 
 
 def test_limit_covering_all_categories_produces_no_skipped_entries(monkeypatch):
@@ -361,6 +364,29 @@ def test_limit_covering_all_categories_produces_no_skipped_entries(monkeypatch):
     )
 
     state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 10}
+    result = risk_summarizer_node(state)
+
+    assert len(result["risk_summary_by_category"]) == 4
+    assert all(not c["skipped"] for c in result["risk_summary_by_category"])
+
+
+def test_limit_of_999_summarizes_all_categories(monkeypatch):
+    """999 is the UI's 'summarize all' value -- real filings have far
+    fewer named categories than that, so it must not skip anything."""
+    from edgar_research_agent.agent.nodes.risk_summarizer import risk_summarizer_node
+
+    fake_categories = [
+        _FakeCategorySummary("overview summary"),
+        _FakeCategorySummary("summary A"),
+        _FakeCategorySummary("summary B"),
+        _FakeCategorySummary("summary C"),
+    ]
+    monkeypatch.setattr(
+        "edgar_research_agent.agent.nodes.risk_summarizer.get_llm",
+        lambda: _FakeLLM(fake_categories),
+    )
+
+    state = {"ticker": "TEST", "risk_factors_text": THREE_CATEGORY_TEXT, "max_categories_to_summarize": 999}
     result = risk_summarizer_node(state)
 
     assert len(result["risk_summary_by_category"]) == 4

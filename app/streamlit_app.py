@@ -21,18 +21,19 @@ st.title("10-K Research Agent")
 
 ticker = st.text_input("Ticker", value="MSFT").upper().strip()
 max_categories_to_summarize = st.number_input(
-    "Max risk categories to summarize (0 = summarize all)",
-    min_value=0, value=0, step=1,
+    "Max risk categories to summarize (0 = summarize none, 999 = summarize all)",
+    min_value=0, max_value=999, value=999, step=1,
     help="Limits how many risk categories get sent to the LLM for summarization, in the filing's "
          "own document order. Categories beyond this limit are skipped (no LLM call for them), but "
          "you can still read their original text -- useful for controlling token cost on filings "
-         "with many risk categories.",
+         "with many risk categories. 0 skips every named category (Overview is still summarized); "
+         "999 is the max, and covers every category any real filing has.",
 )
 
 if st.button("Generate memo") and ticker:
     with st.spinner(f"Fetching and analyzing {ticker}..."):
         st.session_state["memo"] = generate_memo(
-            ticker, max_categories_to_summarize=max_categories_to_summarize or None,
+            ticker, max_categories_to_summarize=max_categories_to_summarize,
         )
 
 memo = st.session_state.get("memo")
