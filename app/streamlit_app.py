@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import streamlit as st
-from edgar_research_agent.memo.formatter import generate_memo
+from edgar_research_agent.memo.formatter import generate_memo, check_category_groundedness
 
 st.set_page_config(page_title="10-K Research Agent", layout="wide")
 st.title("10-K Research Agent")
@@ -47,7 +47,11 @@ if memo:
     st.table([s.model_dump() for s in memo["segments"]])
 
     st.subheader("Current Risk factors summary (by category)")
-    st.caption("Item 1A, summarized by category -- expand a category to check the summary against its exact source text.")
+    st.caption(
+        "Item 1A, summarized by category -- expand a category to check the summary against its "
+        "exact source text. Each summary is groundedness-checked automatically; use Re-check for "
+        "a second opinion, since LLM output isn't perfectly deterministic."
+    )
     for category in memo["risk_summary_by_category"]:
         with st.expander(f"📌 {category['heading']}"):
             col_summary, col_source = st.columns(2)
@@ -61,6 +65,28 @@ if memo:
                     height=300, label_visibility="collapsed",
                     key=f"source_{category['heading']}",
                 )
+
+            groundedness_key = f"groundedness_{category['heading']}"
+            if groundedness_key not in st.session_state:
+                st.session_state[groundedness_key] = category["groundedness"]
+
+            if st.button("Re-check groundedness", key=f"recheck_{category['heading']}"):
+                with st.spinner("Re-checking summary against source text..."):
+                    st.session_state[groundedness_key] = check_category_groundedness(category)
+
+            result = st.session_state[groundedness_key]
+            st.caption(f"Backend: {result.backend}")
+            if result.grounded:
+                st.success("No unsupported claims found.")
+            else:
+                if result.ungrounded_percentage is not None:
+                    st.warning(f"{result.ungrounded_percentage:.0%} of the summary may be unsupported.")
+                else:
+                    st.warning("Some claims in the summary may not be supported by the source text.")
+                for span in result.ungrounded_spans:
+                    st.markdown(f"- \u201c{span.text}\u201d")
+                    if span.reason:
+                        st.caption(span.reason)
 
     st.subheader("Ask a follow-up question")
     question = st.chat_input("Ask about this company's filing...")

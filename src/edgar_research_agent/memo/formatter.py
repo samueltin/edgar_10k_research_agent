@@ -22,13 +22,26 @@ def generate_memo(ticker: str) -> dict:
             "segments": [SegmentKPI, ...],
             "validation_status": "PASS" | "FAIL",
             "errors": str,
-            "risk_summary_by_category": [{"heading": str, "summary": str, "source_text": str}, ...],
+            "risk_summary_by_category": [
+                {"heading": str, "summary": str, "source_text": str, "groundedness": GroundednessResult},
+                ...
+            ],
             "mda_text": str,
         }
+
+    groundedness is now computed automatically by the graph (agent.nodes.
+    groundedness_checker), one per category, merged in here by position --
+    see that node's docstring for the real cost/latency consequence of
+    this running on every memo generation, not on demand.
     """
     from edgar_research_agent.agent.graph import run
 
     result = run(ticker)
+
+    risk_summary_by_category = [
+        {**category, "groundedness": groundedness}
+        for category, groundedness in zip(result["risk_summary_by_category"], result["groundedness_results"])
+    ]
 
     return {
         "company_name": result["company_name"],
@@ -37,7 +50,7 @@ def generate_memo(ticker: str) -> dict:
         "segments": result["extracted_segments"],
         "validation_status": result["validation_status"],
         "errors": result["errors"],
-        "risk_summary_by_category": result["risk_summary_by_category"],
+        "risk_summary_by_category": risk_summary_by_category,
         "mda_text": result["mda_text"],
     }
 
@@ -56,3 +69,23 @@ def _compute_gross_margin_pct(kpi_records) -> dict:
         for year in revenue_by_year
         if year in gross_profit_by_year and revenue_by_year[year]
     }
+
+
+def check_category_groundedness(category: dict):
+    """Re-check one risk-summary category's groundedness on demand.
+
+    generate_memo() now computes a groundedness result for every category
+    automatically (see agent/nodes/groundedness_checker.py), so this is no
+    longer the only way to get one. Its real purpose now: LLM output isn't
+    perfectly deterministic, so an analyst who wants a second opinion on
+    one specific category (rather than trusting the single automatic
+    result) can call this to re-run the check. Kept as a thin wrapper
+    around agent.groundedness.check_groundedness() for the same testability
+    and reuse reasons as before.
+
+    category is one entry from risk_summary_by_category, i.e.
+    {"heading": str, "summary": str, "source_text": str, "groundedness": GroundednessResult}.
+    """
+    from edgar_research_agent.agent.groundedness import check_groundedness
+
+    return check_groundedness(category["summary"], category["source_text"])
