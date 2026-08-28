@@ -1,5 +1,6 @@
 """Fetch narrative sections (MD&A, Risk Factors) from a company's latest 10-K."""
 import os
+import sys
 from edgar import set_identity, Company
 
 set_identity(os.environ.get("EDGAR_IDENTITY", "Your Name <you@example.com>"))
@@ -21,6 +22,9 @@ def get_mda_and_risk_factors(ticker: str) -> tuple[str, str]:
 
 
 if __name__ == "__main__":
-    mda, risks = get_mda_and_risk_factors("MSFT")
+    ticker = sys.argv[1] if len(sys.argv) > 1 else "MSFT"
+    mda, risks = get_mda_and_risk_factors(ticker)
     print(f"MD&A: {len(mda.split()):,} words")
     print(f"Risk Factors: {len(risks.split()):,} words")
+    print(mda)
+
