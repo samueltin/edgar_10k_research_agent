@@ -4,6 +4,7 @@ Chat is intentionally scoped to only the data already extracted for the
 selected company -- it should say so if asked something outside that data,
 not guess.
 """
+import re
 import sys
 from pathlib import Path
 
@@ -42,7 +43,42 @@ if memo:
     st.header(memo["company_name"])
 
     st.subheader("Key financials")
-    st.table([r.model_dump() for r in memo["kpi_records"]])
+    kpi_rows = [r.model_dump() for r in memo["kpi_records"]]
+    if kpi_rows:
+        shared_fields = ["company_name", "company_cik", "fiscal_period", "source"]
+        dropped_fields = {"source_location"}
+        shared = {
+            field: kpi_rows[0][field]
+            for field in shared_fields
+            if len({row[field] for row in kpi_rows}) == 1
+        }
+        if shared:
+            labels = {
+                "company_name": "Company Name",
+                "company_cik": "Company CIK",
+                "fiscal_period": "Fiscal Period",
+                "source": "Source",
+            }
+            st.markdown(
+                " &nbsp;|&nbsp; ".join(
+                    f"**{labels[field]}:** {shared[field]}"
+                    for field in shared_fields
+                    if field in shared
+                )
+            )
+        kpi_rows = [
+            {
+                k.replace("_", " ").capitalize(): (
+                    re.sub(r"(?<!^)(?=[A-Z])", " ", v) if k == "metric_name" else v
+                )
+                for k, v in row.items()
+                if k not in shared and k not in dropped_fields
+            }
+            for row in kpi_rows
+        ]
+    st.html("<style>.st-key-kpi_table thead th { text-align: center !important; }</style>")
+    with st.container(key="kpi_table"):
+        st.table(kpi_rows)
 
     if memo["gross_margin_pct"]:
         st.caption("Gross margin: " + ", ".join(
@@ -55,7 +91,10 @@ if memo:
         st.success("Validated against XBRL total revenue")
     else:
         st.warning(f"Flagged for review: {memo['errors']}")
-    st.table([s.model_dump() for s in memo["segments"]])
+    st.table([
+        {k.replace("_", " ").capitalize(): v for k, v in s.model_dump().items()}
+        for s in memo["segments"]
+    ])
 
     st.subheader("Current Risk factors summary (by category)")
     st.caption(
